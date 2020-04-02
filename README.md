@@ -1,2 +1,7 @@
-# fish_rba
-Modelling and statistics for the risk-benefit assessment of FISH @vkm
+# Repository for VKM's Risk-benefit assessment of Fish.
+
+Working repo for those involved in the project. 
+
+Tip: sync your local folders with the datafolders on Risken/Sharepoint.
+
+![logo]('www/vkm-logo-large.png')
