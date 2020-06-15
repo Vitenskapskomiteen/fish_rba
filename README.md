@@ -4,4 +4,4 @@ Working repo for those involved in the project.
 
 Tip: sync your local folders with the datafolders on Risken/Sharepoint.
 
-![logo]('www/vkm-logo-large.png')
+![logo](www/vkm-logo-large.png)
