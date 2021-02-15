@@ -1,0 +1,296 @@
+---
+title: "Fish and stroke"
+author: "Jostein Starrfelt"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    code_folding: hide
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+# library(RColorBrewer)
+# library(kableExtra)
+
+```
+
+## Modelling the health impacts of fish intake on stroke
+The grading of the scientific evidence deems that there is 'probably' a link between fish consumption and stroke - i.e. that intake of fish reduced the probability of stroke. This document is the first attempt to both show results and code necessary to establish a quantitative link between the fish intake in Norway and incidence of stroke.
+
+## Sources of data 
+### Dietary intake
+Intake is in this example restricted to the adult population, ages 18-70 yrs old. The dietary intake used is from the [Norkost survey](https://www.helsedirektoratet.no/rapporter/norkost-3-en-landsomfattende-kostholdsundersokelse-blant-menn-og-kvinner-i-norge-i-alderen-18-70-ar-2010-11/Norkost%203%20en%20landsomfattende%20kostholdsundersokelse%20blant%20menn%20og%20kvinner%20i%20Norge%20i%20alderen-18-70%20%C3%A5r%202010-11.pdf/_/attachment/inline/b7bafaab-6059-4450-8d76-c3ed9f3eaf3f:be251cd1153cf1ae8e4c46eedddc13b36da3d11d/Norkost%203%20en%20landsomfattende%20kostholdsundersokelse%20blant%20menn%20og%20kvinner%20i%20Norge%20i%20alderen-18-70%20%C3%A5r%202010-11.pdf) as coded in KBS (Kostberegningssystemet). In practice the consumption of all types of food and drinks in the lowest level of the food database (AE18) for 1787 individuals over two days are imported into R. 
+
+Several categorizations of dietary elements related to fish has been compiled. To get the intake of fish. [Perhaps show the grouping used in this example]. In this example I have included all types of 'fish' but removed 'other seafood'. Amounts consumed are rescaled for weight-loss during preparation and content of raw filet pr unit eaten product. The rescaling and grouping was prepared by Inger-Therese. The groups are included in the data used in R, the scaling factors are not. 
+
+### Dose-response curve relating fish intake to stroke risk.
+*Food groups and risk of coronary heart disease, stroke and heart failure: A systematic review and dose-response meta-analysis of prospective studies* by Bechthold et al. (2017/2019) was used as the source for the dose response, relating fish intake [g/day] to relative risk (RR) of stroke. The dose-response curve was extracted from Figure 3 using the online version of the [WebPlotDigitizer](https://automeris.io/WebPlotDigitizer/). 
+
+### Incidence of stroke in Norway.
+Data for the incidence of stroke in Norway were gathered from the Norwegian Cardiovascular Disease Registry (Hjerte- og karregisteret, can be found [here](http://statistikkbank.fhi.no/hkr/)). Number of stroke ("Akutt hjerneslag") diagnoses for males/females in 4 age groups (0--49, 50--69,70--89,90+) for years 2015--2019 are available. Here I used the numbers from 2019. The values used are all cases of stroke, both main diagnosis and seconday (bi-) diagnosis. I have not used data on mortality from stroke, which is available from the public part of the death-registry [here](http://statistikkbank.fhi.no/dar/). In 2019 there were 13 858 reported cases of stroke and 1 655 deaths due to stroke (I61, I63 and I64). Assuming these are comparable numbers the probability of dying, given a stroke is overall `r round(100*1655/13858)/100`. This probability, as well as the general risk of stroke is highly age-dependent. Deaths due to stroke are available in 5 year age-groups, but the incidence of stroke is available in 4 age-groups.
+
+Whether or not we should only keep the main diagnosis incidence or not should be evaluated. 
+
+### Norwegian population
+Oftentimes it is useful to correct dietary intake from surveys due to potential bias in the survey population. For i Data on both the age-composition of the adult Norwegian population (SSB: [Table 07459](https://www.ssb.no/statbank/table/07459/) and age structured data (grouped by 5 years) on level of education (SSB: [Table 09430](https://www.ssb.no/statbank/table/09430/)) were gather from *Statistics Norway* (SSB). Data for 2019 were used.
+
+
+```{r LoadData, echo=TRUE, cache=TRUE,warning=FALSE, message = FALSE,}
+# Loading packages, sampSSB (to sample real agedistributions and education levels)
+# and RData file containing all dietary surveys, fishgroups etc.
+rm(list=ls())
+library(MCMCglmm)
+library(org) #
+library(dplyr)
+library(readxl)
+# THese are my local folders!
+source('C:/Users/JSTA/Folkehelseinstituttet/Risk and benefit assessment of fish - Dokumenter/Eksponeringsgruppen/r_code/sampSSB.R')
+cleandata = "C:/Users/JSTA/Folkehelseinstituttet/Risk and benefit assessment of fish - Dokumenter/Eksponeringsgruppen/cleandata" # THese are my local folders!
+load(paste0(cleandata,"/StartClean.RData"))
+options(dplyr.summarise.inform = FALSE)
+keep_codes_all <- setdiff(as.numeric(Fish_groups$fish),c(0,as.numeric(Fish_groups$otherseafood)))
+fiskedata <-   nk3data %>% # Take the dietary intake tibble
+  filter(kbs_code %in% keep_codes_all) %>% # filter out only the codes we want (i.e. only fish or remove supplements)
+  group_by(day,ind) %>% # group intakes by day and individuals and
+  summarise(fishperday_all = sum(amounts_cor,na.rm=T)) #%>% #take the sum, this sums all amounts*conc for each day within each individual
+# in the dataframe, including the ones with no reported fish-intake.
+tmp <- expand.grid(ind = levels(nk3data$ind),
+                   day = levels(nk3data$day))
+fiskedat <- tmp %>% full_join(.,fiskedata,by=c('ind','day'))
+fishdata <- fiskedat %>% mutate(eatsfish=if_else(is.na(fishperday_all),0,1)) %>%
+  inner_join(.,indsNK3,by='ind')
+rm(fiskedat)
+rm(fiskedata)
+
+# Observed individual means, i.e. sum and half the fish intake for all individuals
+oims <- fishdata %>% group_by(ind) %>% summarize(oim = sum(fishperday_all,na.rm=T)/2) %>% pull(oim)
+
+# Names of foods includwed as fish. 
+# ae18 %>% filter(kbs_code %in% keep_codes_all) %>% pull(kbs_name)
+
+
+```
+
+
+
+## Modelling the fish-intake
+The daily intake of fish calculated was fitted to a generalized mixed-model using the package MCMCglmm. This package allows for multivariate approaches and a couple of different models were applied to the data. The structure of the models should probably be altered and other applications should perhaps be evaluated, particularly with random-effects for each sex.
+
+```{r runMCMCmodels, cache = TRUE,warning=FALSE,message=FALSE,echo=TRUE}
+
+# fix = 1 makes all fixed. Does 3 make all from 3ff (i.e. 3&4) fixed?
+prio1 = list(R = list(V = diag(2),nu=3,fix=c(2)),
+             G = list(G1 = list(V= diag(2)/1   , nu=3)))
+# fiskemod1 <- MCMCglmm(cbind(log(fishperday_all),eatsfish)~trait*sex+trait*age,
+#                       random= ~ idh(trait):ind,
+#                       rcov  = ~ idh(trait):units,
+#                       family = c('gaussian','categorical'),
+#                       data = fishdata,
+#                       prior = prio1,
+#                       nitt = 25000)
+# 
+# fiskemod2 <- MCMCglmm(cbind(log(fishperday_all),eatsfish)~trait*sex+trait*age,
+#                       random= ~ us(trait):ind,
+#                       rcov  = ~ idh(trait):units,
+#                       family = c('gaussian','categorical'),
+#                       data = fishdata,
+#                       prior = prio1,
+#                       nitt = 25000)
+# Seems like people who eat fish more often do not necessarily eat more fish if they eat.
+# Fiskemod1 and fiskemod2 above are now commented out - they do not fit
+# the data as well as fiskemod3 below. TH exact models here should anyway be evaluated more thoroughly. 
+# Do males vary more or less than females in amounts/tendency to eat fish?
+# Level of education?
+# But it does seem like sex has little impact on whether or not they eat fish
+
+fiskemod3 <- MCMCglmm(cbind(log(fishperday_all),eatsfish)~at.level(trait,1):sex+trait*age,
+                      random= ~ idh(trait):ind,
+                      rcov  = ~ idh(trait):units,
+                      family = c('gaussian','categorical'),
+                      data = fishdata,
+                      prior = prio1,
+                      nitt = 25000,verbose=FALSE)
+# sampSSB(10)
+
+mysamp <- function(ft,n_ind,n_days,drawnew=T,ages=c(18,70),sex='both'){
+  # ft is a MCMCglmm fit structure, n_ind is number of individuals
+  # sampled, n_days is number of days per individual sampled,
+  # if drawnew ==TRUE, then covariates (sex and ages) are sampled from 
+  # the generalt public (SSB data), if FALSE then the covariates from Norkost
+  # are sampled. 
+  # ages gives the bounds on the age of the sampled subgroup (18-70),
+  # sex ('both','f','m') gives the sex of the subgroup
+  # This function must be changed when applied to different model structures
+  # 
+    if (drawnew){
+  cv <- sampSSB(n_ind,sex=sex,ages=ages)[,c(1,2,4)]
+  cv$sexfemale = 1*(cv$sexmale==0) # in this model the female became 1
+  } else {
+    nkix <- sample(1:1787,n_ind,replace=T)
+    cv <- data.frame(`X.Intercept.` = rep(1,n_ind),
+                     age = indsNK3$age[nkix],
+                     sexfemale = 1*(indsNK3$sex[nkix]=='female'))
+      # ft$X[1:1787,c(1,3,4)]
+  }
+  ix <- sample(dim(ft$Sol)[1],n_ind,replace=TRUE)
+  # Eat or not
+  cvtmp <- cbind(cv$X.Intercept.,cv$X.Intercept.,cv$age,cv$age)
+  lx_tmp <- rowSums(cvtmp * ft$Sol[ix,c(1,2,3,5)]) + rnorm(n_ind,mean=0,sd=sqrt(ft$VCV[ix,2]))
+  # Need to add days
+  lx <- matrix(rep(lx_tmp,n_days),byrow=F,ncol=n_days) +
+    replicate(n_days,rnorm(n_ind,0,sqrt(ft$VCV[ix,3])))
+    # matrix(rnorm(n_ind*n_days,0,sqrt(ft$VCV[ix,4])),byrow=F,ncol=n_days)
+  
+  exp(lx)/(1+exp(lx))> runif(n_ind*n_days)
+  
+  # Amounts
+  cvtmp2 <- cbind(cv$X.Intercept.,cv$age,cv$sexfemale)
+  lx2_tmp <- rowSums(cvtmp2 * ft$Sol[ix,c(1,3,4)]) + rnorm(n_ind,mean=0,sd=sqrt(ft$VCV[ix,1]))
+  lx2 <- matrix(rep(lx2_tmp,n_days),byrow=F,ncol=n_days) + matrix(rnorm(n_ind*n_days,0,sqrt(ft$VCV[ix,3])),byrow=F,ncol=n_days)
+  
+  
+  eats <- exp(lx)/(1+exp(lx))> runif(n_ind*n_days)
+  amounts <- exp(lx2)
+  
+  return(list(eats=eats,amount=amounts,lat_prob = lx,lat_amnt = lx2,cv=cv))
+}
+
+```
+
+
+### Dietary data to be predicted
+The data to be predicted by the model are the categorical (eats fish or not) and numerical (log amounts fish eaten, if fish is consumed) for each the two days for the 1787 individuals. The model is thus multivariate with a 'categorical' (eat: yes/no) and a 'gaussian' (normally distributed: log(fish [g/day]) response variable.
+
+Amount eaten is the sum of all forms of fish, adjusted for loss during cooking and amount of fish in fish products. This includes `r ae18 %>% filter(kbs_code %in% keep_codes_all) %>% pull(kbs_name) %>% as.character %>% paste(sep=",")`. 
+
+The fixed terms included in the models were sex and age. Thus the degree to which females and males differ in both the probability of having fish on any given day and the amount eaten was estimated. Similarly for age - does age impact the probability of eating fish and/or the amount of fish eaten.
+
+Random terms detail how the variance in the observations (eats fish or not, amount of fish eaten) is structured. The variance in a mixed model is hieararchical - in the applications for dietary data there is some variability among individuals and some variability within individuals. All individuals vary in how much fish they eat (on average), but each given individual also varies in how much fish they eat from day to day. To get the distribution of the long-term intake of a given population we wish to somehow remove the variability 'within' individuals, but keep the variability among individuals. In the framework applied here - among individual variability is implemented as random effects, and within individuals is modelled as residuals.
+
+Of the 1787 individuals `r fishdata %>% group_by(ind) %>% summarize(n_f = sum(eatsfish)) %>% summarize(sum(n_f==0)) %>% pull` did not consume fish on any of the two reported days, while  `r fishdata %>% group_by(ind) %>% summarize(n_f = sum(eatsfish)) %>% summarize(sum(n_f==1)) %>% pull` reported eating fish on 1 of the two days and `r fishdata %>% group_by(ind) %>% summarize(n_f = sum(eatsfish)) %>% summarize(sum(n_f==2)) %>% pull` consumed fish on both reporting days.
+
+### Simulating long-term intakes
+After a particular model has been fit to the data, the estimated parameters can be used to simulate data according to the model. When parameters that we know are biasing the pool of respondents in the survey are estimated to have an impact on the response we can also correct for this. 
+
+In practice this involves coding a function specifically designed to fit the structure of a given MCMCglmm-model - with different random and/or fixed terms this function must be changed. In the Rmarkdown file for this document the function is defined as `mysamp`, and will work on a MCMCglmm model with sex as fixed predictor
+
+### Fish intake - simple means and model approach.
+A simple classical approach to dietary intake from a survey of *n* days is to report quantiles of the mean intake for each individual, so called *observed individual means*. This has no correction for the potential bias in the survey population vis-a-vis the Norwegian population and has a tendency to have too wide tails of the intake distribution due to the low number of days. While `r fishdata %>% group_by(ind) %>% summarize(n_f = sum(eatsfish)) %>% summarize(sum(n_f==0)) %>% pull` of 1787 individuals have reported not eating fish on any of the two days, these individuals are very unlikely to never consume any fish. In fact, from the frequency questionnaire associated with Norkost, only 12 of 1453 individuals report never eating any fish products.
+
+### Long - term fish intake {.tabset}
+#### Probability of eating fish
+Modelled and empirical probabilities of eating fish on any given day. Modelled probabilities are drawn for 10 000 individuals in each age-group and 150 days. The model and the underlying data correspond reasonably well and shows the clear trend that fish intake is more likely for older people.
+```{r probeatfish, cache = TRUE,warning=FALSE,message=FALSE,echo=TRUE}
+foo <- function(ii){c(quantile(rowMeans(ii$eats*ii$amount),c(0.025,0.05,0.5,0.95,0.975)),
+                      sum(rowMeans(ii$eats*ii$amount)>((185*2)/7))/dim(ii$eats)[1],
+                      sum(rowMeans(ii$eats*ii$amount)>((185*3)/7))/dim(ii$eats)[1],
+                      frac(ii$eats))}
+frac <- function(ii){table(ii)/length(ii)}
+a = sapply(seq(21,66,by=5),function(jj){
+  foo(mysamp(fiskemod3,n_ind=1e4,n_days=150,ages=c(jj:(jj+4))))})
+
+ags <- c('21-25','26-30','31-35','36-40'
+         ,'41-45','46-50','51-55','56-60','61-65','66-70')
+
+plot(a[9,],type="o",ylim=c(0,1),ylab='Probability of eating fish on any given day',xaxt='n',
+     xlab='Age group')
+axis(1,at=1:10,labels=ags)
+
+p_nk <- sapply(seq(21,66,by=5),function(jj){
+  fishdata %>% filter(age %in% c(jj:(jj+4))) %>% pull(eatsfish) %>% frac})
+
+points(1:10,p_nk[2,],col='red')
+legend('topright',legend=c('Modelled probability','Raw data (Norkost)'),
+       pch=c(1,1),col=c('black','red'))   
+```
+
+#### Amount of fish
+Long-term fish intake as modelled by sampling 10 000 individuals in each age group and calculating daily mean fish intake for 150 days for each individual.
+```{r, cache = TRUE,warning=FALSE,message=FALSE,echo=TRUE}
+matplot(t(a[c(1,3,5),]),type="o",lwd=2,log='y',pch=1,
+        lty=c(2,1,2),col='black',ylab='Long-term intake [g/day]',
+        xlab='Age group',xaxt='n',ylim=c(2,500))
+axis(1,at=1:10,labels=ags)
+abline(h = (185*2)/7,lty=2,lwd=2,col='grey')
+abline(h = (185*3)/7,lty=2,lwd=2,col='grey')
+```
+
+
+
+## Dose-response curve
+
+The dose-response curve extracted from Bechthold et al (2017) is shown in figure 1.
+
+```{r dr, caption = "Dose-response curve extracted from Bechthold et al (2017). Fish intake in grams / day (X) vs Relative risk of stroke (Y). Full line shows the mean relative risk with upper and lower confidence intervals (dashed lines).", cache = TRUE, echo=TRUE}
+
+
+tmp <- read.csv('C:/Users/JSTA/Folkehelseinstituttet/Risk and benefit assessment of fish - Dokumenter/Eksponeringsgruppen/rawdata/wpd_datasets.csv',
+                skip=1)
+
+
+
+mnf <- splinefun(c(0,tmp[1:60,1]),c(1,tmp[1:60,2]))
+mnu <- splinefun(c(0,tmp[1:60,3]),c(1,tmp[1:60,4]))
+mnl <- splinefun(c(0,tmp[1:59,5]),c(1,tmp[1:59,6]))
+
+rr_norm <- function(fish){
+  fish <- pmin(fish,125)
+  return(list(mu = mnf(fish),sd = (mnf(fish)-mnl(fish))/qnorm(0.975)))
+}
+# These are symmetrical. the Ci is reported to be 95%, so we assume
+# a normal distribution of the risk, given an intake of fish 
+fishs <- seq(0,125,by=1)
+plot(fishs,mnf(fishs),type="l",lty=1,ylim=c(0.7,1.2),xlab='Fish intake [g/day]',
+     ylab = 'RR',main='Dose response from Bechthold et al 2017',cex.main=0.7)
+lines(fishs,mnu(fishs),type="l",lty=2)
+lines(fishs,mnl(fishs),type="l",lty=2)
+
+
+```
+
+This curve was extracted by using the [*webplotdigitizer*](https://apps.automeris.io/wpd/) and coded into R as a spline interpolation of points from the figure. The dose-response curve described the relation between fish intake [in grams per day] and relative risk of stroke (both fatal and non fatal). The paper claims no non-linearity in response, citing a p-value, but we use this non-linear dose-response curve nevertheless. I'm not entirely sure what their 'non-linearity' test really is a test of. The range of fish-intakes presented is 0-125 grams per day. 15 studies was used to generate this dose-response curve, using different manners of measuring fish intake.
+
+### For whom does this dose-response curve apply?
+The dose-response curve is extracted using a meta-analytic approach on 15 individual studies. All of these studies report relative risk for groups of individuals with different intake levels. In some cases individuals are categorized into intake groups based on frequencies of consumption, or more detailed reporting on their dietary habits. Nevertheless the values that goes into the analysis are at the level of groups. Mean intake of group (A) at this level of stroke risk vs mean intake of group (B) at another level of stroke risk and so on. Thus a dose-response curve seems to apply at the group level. 
+
+
+
+```{r oim,fig.cap="Figure X: Boxplot of observed individual means, excluding individuals with 0 fish intake"}
+oims <- fishdata %>% group_by(ind) %>% summarize(oim = sum(fishperday_all,na.rm=T)/2,sex=sex[1],age=age[1])
+boxplot(oim~sex,data=oims[which(oims$oim>0),],log='y',ylab=
+          'Observed individual mean fish intake')
+```
+
+
+The fitted multivariate model can be used to sample a large number of individuals of particular age classes, and also for a large number of days to try to remove the day-to-day variability that is evident in observed individual means using 2 days only. 
+
+```{r simus2}
+
+
+```
+
+
+
+
+## Quantitative benefit-risk
+The goal here is to quantify the effect of changing the Norwegian intake of fish on the incidence of stroke. This can be deconstructed into a number of steps necessary, and it can be useful to list them to make explicit some of the assumptions needed for this calculation to actually be reasonable or legitimate.
+
+1. Select sub-group (age-class and perhaps sex).
+2. Estimate the current (mean) level of fish intake for this group (using mixed models OR simpler approaches).
+3. Estimate the relative risk for this sub-group (using the dose-response relation) - *RR_now*.
+4. Choose a number of different scenarios for fish intake for the same subgroup.
+5. Estimate the relative risk under this scenario (*RR_new*)
+6. Estimate the expected change in the absolute number of strokes. The expectation is the number of strokes now multiplied with the ratio of relative risks (*RR_new*/*RR_now*).
+
+In all of these steps there are different choices to be made on the details of the calculation, and more importantly, the degree and manner to which one tries to quantitatively take uncertainty into account.
+
+
+
+## Questions for discussion
+* How to best characterize the fish-intake relevant for linking with the dose-response curve?
++ Using simple observed individual means from Norkost
++ Applying multivariate models correcting for (e.g.) age, education
+* The fish-intake used in these analyses must be supplemented with more detailed analysis of the fish-intake per se - fatty vs lean fish, types of intake (dinner, bread spread etc).
+* 
